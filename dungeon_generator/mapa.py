@@ -283,3 +283,37 @@ class Mapa:
         
         resumen = {k: len(v) for k, v in asignadas.items()}
         return resumen
+    def obtener_estadisticas_mapa(self) -> dict:
+        """
+        Retorna: {
+        'total': int,
+        'vacios': int,
+        'tesoros': int,
+        'monstruos': int,
+        'jefes': int,
+        'eventos': int,
+        'promedio_conexiones': float
+        }
+        """
+        total = len(self.habitaciones)
+        conteos = {"vacios": 0, "tesoros": 0, "monstruos": 0, "jefes": 0, "eventos": 0}
+        suma_conex = 0
+        for hab in self.habitaciones.values():
+            suma_conex += len(hab.conexiones)
+            if hab.contenido is None:
+                conteos["vacios"] += 1
+            else:
+                t = getattr(hab.contenido, "tipo", None)
+                if t == "tesoro":
+                    conteos["tesoros"] += 1
+                elif t == "monstruo":
+                    conteos["monstruos"] += 1
+                elif t == "jefe":
+                    conteos["jefes"] += 1
+                elif t == "evento":
+                    conteos["eventos"] += 1
+                else:
+                    conteos["vacios"] += 1
+        promedio = (suma_conex / total) if total > 0 else 0.0
+        resumen = {"total": total, **conteos, "promedio_conexiones": round(promedio, 2)}
+        return resumen
