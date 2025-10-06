@@ -34,51 +34,160 @@ class Mapa:
 
     def generar_estructura(self, n_habitaciones: int):
         """
-        Genera N habitaciones conectadas garantizando que todas sean accesibles
-        desde la habitación inicial.
+        Genera n_habitaciones conectadas, con el spawn siempre en el borde.
+        Estrategia:
+        - Elegir spawn en borde (_coords_en_borde()).
+        - Mantener frontier de celdas adyacentes a las existentes.
+        - Priorizar candidatos más alejados del conjunto existente para esparcir habitaciones.
+        - Cuando se añade una habitación, intentar conectar con 1 vecino válido y con
+            cierta probabilidad añadir conexiones adicionales para densificar.
+        - Si la frontier se vacía antes de alcanzar n_habitaciones, reconstruir frontier desde existentes.
         """
-        max_posibles = self.ancho * self.alto
         if n_habitaciones <= 0:
             raise ValueError("n_habitaciones debe ser >= 1")
+        max_posibles = self.ancho * self.alto
         if n_habitaciones > max_posibles:
             raise ValueError("Demasiadas habitaciones para el tamaño del mapa")
 
+        import random
+
+        self.habitaciones.clear()
+        self._next_id = 0
+
+        # elegir inicio en borde
         posibles_bordes = self._coords_en_borde()
         inicio_coord = random.choice(posibles_bordes)
-        self._next_id = 0
         inicio = Habitacion(self._next_id, inicio_coord, inicial=True)
         self._next_id += 1
         self.habitaciones[inicio_coord] = inicio
         self.habitacion_inicial = inicio
 
-        frontera: List[Habitacion] = [inicio]
-
         deltas = {"norte": (0, -1), "sur": (0, 1), "este": (1, 0), "oeste": (-1, 0)}
+        existing = set([inicio_coord])
 
-        while self._next_id < n_habitaciones and frontera:
-            actual = random.choice(frontera)
+        frontier = set()
+        for dx, dy in deltas.values():
+            nx, ny = inicio_coord[0] + dx, inicio_coord[1] + dy
+            if 0 <= nx < self.ancho and 0 <= ny < self.alto:
+                frontier.add((nx, ny))
 
-            vecinos_libres = []
+        def repoblar_frontier():
+            """Si frontier se vacía, reconstruirla mirando alrededor de todas las existing."""
+            f = set()
+            for ex in existing:
+                for dx, dy in deltas.values():
+                    nx, ny = ex[0] + dx, ex[1] + dy
+                    if 0 <= nx < self.ancho and 0 <= ny < self.alto:
+                        coord = (nx, ny)
+                        if coord not in existing and coord not in self.habitaciones and coord not in f:
+                            f.add(coord)
+            return f
+
+        def distancia_min_a_existentes(coord):
+            return min(abs(coord[0] - e[0]) + abs(coord[1] - e[1]) for e in existing)
+
+        P_ADDITIONAL_CONN = 0.25  
+        MAX_ATTEMPT_REPOB = 3    
+
+        repob_intentos = 0
+        while self._next_id < n_habitaciones:
+            if not frontier:
+              
+                if repob_intentos >= MAX_ATTEMPT_REPOB:
+                    break
+                frontier = repoblar_frontier()
+                repob_intentos += 1
+                if not frontier:
+                    continue
+
+       
+            dist_list = [(distancia_min_a_existentes(f), f) for f in frontier]
+           
+            dist_list.sort(reverse=True, key=lambda x: x[0])
+            top_fraction = 0.5  
+            top_k = max(1, int(len(dist_list) * top_fraction))
+            candidates = [f for (_, f) in dist_list[:top_k]]
+            candidate = random.choice(candidates)
+
+            new_hab = Habitacion(self._next_id, candidate)
+            vecinos_existentes = []
             for dir_name, (dx, dy) in deltas.items():
-                nx, ny = actual.x + dx, actual.y + dy
-                if 0 <= nx < self.ancho and 0 <= ny < self.alto and (nx, ny) not in self.habitaciones:
-                    vecinos_libres.append((dir_name, (nx, ny)))
+                neighbor = (candidate[0] - dx, candidate[1] - dy)
+                if neighbor in existing:
+                    vecinos_existentes.append((dir_name, self.habitaciones[neighbor]))
 
-            if not vecinos_libres:
-                frontera.remove(actual)
+            if not vecinos_existentes:
+                frontier.remove(candidate)
                 continue
 
-            dir_elegida, (nx, ny) = random.choice(vecinos_libres)
-            nueva = Habitacion(self._next_id, (nx, ny))
+            random.shuffle(vecinos_existentes)
+            connected = False
+            for dir_name, neigh_hab in vecinos_existentes:
+                try:
+                    neigh_hab.conectar(dir_name, new_hab)
+                    connected = True
+                    break
+                except Exception:
+                    continue
+
+            if not connected:
+                frontier.remove(candidate)
+                continue
+
+            self.habitaciones[candidate] = new_hab
             self._next_id += 1
-            self.habitaciones[(nx, ny)] = nueva
+            existing.add(candidate)
+            frontier.remove(candidate)
 
-            actual.conectar(dir_elegida, nueva)
+            for dx, dy in deltas.values():
+                nx, ny = candidate[0] + dx, candidate[1] + dy
+                if 0 <= nx < self.ancho and 0 <= ny < self.alto:
+                    coord = (nx, ny)
+                    if coord not in existing and coord not in frontier and coord not in self.habitaciones:
+                        frontier.add(coord)
 
-            frontera.append(nueva)
+            if random.random() < P_ADDITIONAL_CONN:
+                for dir_name, (dx, dy) in deltas.items():
+                    neighbor = (candidate[0] - dx, candidate[1] - dy)
+                    if neighbor in existing:
+                        neigh_hab = self.habitaciones[neighbor]
+                        try:
+                            neigh_hab.conectar(dir_name, new_hab)
+                        except Exception:
+                            pass
+
+        if self._next_id < n_habitaciones:
+            for ex in list(existing):
+                if self._next_id >= n_habitaciones:
+                    break
+                for dx, dy in deltas.values():
+                    if self._next_id >= n_habitaciones:
+                        break
+                    nx, ny = ex[0] + dx, ex[1] + dy
+                    coord = (nx, ny)
+                    if not (0 <= nx < self.ancho and 0 <= ny < self.alto):
+                        continue
+                    if coord in existing or coord in self.habitaciones:
+                        continue
+                    new_hab = Habitacion(self._next_id, coord)
+                    for dir_name, (ddx, ddy) in deltas.items():
+                        if ex[0] + ddx == coord[0] and ex[1] + ddy == coord[1]:
+                            try:
+                                self.habitaciones[ex].conectar(dir_name, new_hab)
+                                self.habitaciones[coord] = new_hab
+                                self._next_id += 1
+                                existing.add(coord)
+                            except Exception:
+                                pass
+                            break
+
+        if self._next_id < n_habitaciones:
+            raise RuntimeError("No se pudieron colocar todas las habitaciones (frontera agotada)")
 
         if not self.es_todo_accesible():
-            raise RuntimeError("Error: mapa generado no es completamente accesible (esto no debería pasar)")
+            raise RuntimeError("Error: mapa generado no es completamente accesible")
+
+
 
     def es_todo_accesible(self) -> bool:
         """BFS desde la habitación inicial, verifica que alcance todas las habitaciones."""
@@ -209,7 +318,7 @@ class Mapa:
         asignadas = {"jefes": [], "monstruos": [], "tesoros": [], "eventos": []}
 
         def crear_monstruo_segun_distancia(dist: int) -> Monstruo:
-            base_vida = 4
+            base_vida = 5
             base_ataque = 1
             vida = base_vida + (dist // 2)
             ataque = base_ataque + (dist // 4)
@@ -217,7 +326,7 @@ class Mapa:
             return Monstruo(nombre, vida, ataque)
 
         def crear_jefe_segun_distancia(dist: int) -> Jefe:
-            vida = 12 + dist
+            vida = 8 + dist
             ataque = 3 + (dist // 3)
             recompensa = Objeto(f"TesoroJefe(d{dist})", valor=50 + dist * 5, descripcion="Recompensa de jefe")
             nombre = f"Jefe(d{dist})"
@@ -227,7 +336,6 @@ class Mapa:
             valor = 10 + dist * 2
             obj = Objeto(f"Gema(d{dist})", valor=valor, descripcion=f"Tesoro en distancia {dist}")
             return Tesoro(obj)
-
         def crear_evento_aleatorio(dist: int) -> Evento:
             tipo_evt = random.choice(["trampa", "fuente", "portal", "buff"])
             if tipo_evt == "trampa":
@@ -315,5 +423,5 @@ class Mapa:
                 else:
                     conteos["vacios"] += 1
         promedio = (suma_conex / total) if total > 0 else 0.0
-        resumen = {"total": total, **conteos, "promedio_conexiones": round(promedio, 2)}
+        resumen = {"Total de habitaciones": total, **conteos, "promedio_conexiones": round(promedio, 2)}
         return resumen

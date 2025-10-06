@@ -216,3 +216,14 @@ def contenido_from_dict(d: Dict[str, Any]) -> ContenidoHabitacion:
         return Evento.from_dict(d)
     else:
         raise ValueError(f"Tipo de contenido desconocido en from_dict: {tipo}")
+    
+def interactuar(self, explorador) -> str:
+    explorador.inventario.append(self.recompensa)
+    cat = getattr(self.recompensa, "categoria", "normal")
+    if cat == "equipable":
+        return f"Has encontrado un objeto equipable: {self.recompensa.nombre}. Está en tu inventario; usa 'equipar' para ponértelo."
+    elif cat == "consumible":
+        return f"Has encontrado un consumible: {self.recompensa.nombre}. Está en tu inventario; usa 'usar' para activarlo."
+    else:
+        return f"Has recogido el tesoro: {self.recompensa.nombre} (valor {self.recompensa.valor})"
+
