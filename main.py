@@ -1,184 +1,251 @@
+import os
+import sys
+import random
+from pathlib import Path
+from typing import List
+
 from dungeon_generator.mapa import Mapa
 from dungeon_generator.explorador import Explorador
-from dungeon_generator.contenido import Tesoro, Monstruo
-from pathlib import Path
-
-
+from dungeon_generator.contenido import Tesoro, Monstruo, Evento
 try:
     from dungeon_generator.visualizador import Visualizador
-    HAS_VISUALIZADOR = True
+    HAS_VIS = True
 except Exception:
     Visualizador = None
-    HAS_VISUALIZADOR = False
-
+    HAS_VIS = False
 try:
     from dungeon_generator.serializacion import guardar_partida, cargar_partida
-    HAS_SERIALIZACION = True
+    HAS_SERIAL = True
 except Exception:
     guardar_partida = None
     cargar_partida = None
-    HAS_SERIALIZACION = False
+    HAS_SERIAL = False
 
+CLEAR_CMD = "cls" if os.name == "nt" else "clear"
 
-def mostrar_estadisticas_si_existe(mapa):
-    if hasattr(mapa, "obtener_estadisticas_mapa"):
-        stats = mapa.obtener_estadisticas_mapa()
-    else:
-        total = len(mapa.habitaciones)
-        tipos = {"tesoros": 0, "monstruos": 0, "jefes": 0, "eventos": 0, "vacios": 0}
-        suma_conex = 0
-        for h in mapa.habitaciones.values():
-            suma_conex += len(h.conexiones)
-            if h.contenido is None:
-                tipos["vacios"] += 1
-            else:
-                t = getattr(h.contenido, "tipo", None)
-                if t == "tesoro": tipos["tesoros"] += 1
-                elif t == "monstruo": tipos["monstruos"] += 1
-                elif t == "jefe": tipos["jefes"] += 1
-                elif t == "evento": tipos["eventos"] += 1
-                else: tipos["vacios"] += 1
-        promedio = (suma_conex / total) if total else 0.0
-        stats = {"total": total, **tipos, "promedio_conexiones": round(promedio, 2)}
-    print("Estadísticas del mapa:", stats)
-    return stats
+class Controller:
+    def __init__(self, ancho=8, alto=6, habitaciones=18, seed=42):
+        self.ancho = ancho
+        self.alto = alto
+        self.habitaciones = habitaciones
+        self.seed = seed
+        self._init_game()
+        self.logs: List[str] = []
+        self.save_default = "prueba.json"
 
+    def _init_game(self):
+        self.mapa = Mapa(self.ancho, self.alto, seed=self.seed)
+        self.mapa.generar_estructura(self.habitaciones)
+        self.mapa.colocar_contenido(seed=self.seed)
+        self.explorador = Explorador(self.mapa)
+        self.visualizador = Visualizador(self.mapa) if HAS_VIS else None
 
-def contenido_str(hab):
-    """
-    Return a human-friendly description for the content of `hab` (Habitacion).
-    """
-    c = hab.contenido
-    if c is None:
-        return "vacía"
-    tipo = getattr(c, "tipo", "desconocido")
-    
-    desc = getattr(c, "descripcion", None)
-    if desc:
-        return f"{tipo} — {desc}"
-   
-    if tipo == "tesoro" and hasattr(c, "recompensa"):
-        r = c.recompensa
-        return f"tesoro — {getattr(r,'nombre',str(r))} (valor {getattr(r,'valor', '?')})"
-    
-    if tipo in ("monstruo", "jefe"):
-        nombre = getattr(c, "nombre", "monstruo")
-        vida = getattr(c, "vida", "?")
-        ataque = getattr(c, "ataque", "?")
-        return f"{tipo} — {nombre} (PV {vida}, Atq {ataque})"
-   
-    if tipo == "evento":
-        nombre = getattr(c, "nombre", "evento")
-        efecto = getattr(c, "efecto", {})
-        return f"evento — {nombre} (efecto: {efecto})"
-    return tipo
+    def reset(self):
+        self._init_game()
+        self.logs = []
+        self.log("Juego reiniciado.")
 
+    def log(self, msg: str):
+        self.logs.append(msg)
+        if len(self.logs) > 100:
+            self.logs.pop(0)
 
-def demo():
-    # generar mapa y colocar contenido
-    mapa = Mapa(8, 6, seed=42)
-    mapa.generar_estructura(12)
-    resumen = mapa.colocar_contenido(seed=42)
-    print("Resumen colocar_contenido:", resumen)
+    def render(self):
+        os.system(CLEAR_CMD)
+        print("=== Dungeon Project — Consola interactiva ===")
+        if self.visualizador:
+            self.visualizador.mostrar_mapa_completo()
+        else:
+            print(self.mapa.imprimir_ascii())
+        if self.visualizador:
+            self.visualizador.mostrar_minimapa(self.explorador)
+            self.visualizador.mostrar_estado_explorador(self.explorador)
+        else:
+            print("Minimapa (visitadas=o, tu=X):")
+            grid = [[" " for _ in range(self.mapa.ancho)] for _ in range(self.mapa.alto)]
+            for (x, y), hab in self.mapa.habitaciones.items():
+                if hab.visitada:
+                    grid[y][x] = "o"
+            ex, ey = self.explorador.posicion_actual
+            grid[ey][ex] = "X"
+            for row in grid:
+                print("".join(row))
+            print("Estado del explorador:")
+            print(f"  Pos: {self.explorador.posicion_actual}  Vida: {self.explorador.vida}  Ataque: {self.explorador.calcular_ataque()}")
+            inv = ", ".join([f"[{i}] {getattr(o,'nombre',str(o))}" for i,o in enumerate(self.explorador.inventario)]) or "vacío"
+            print("  Inventario:", inv)
+        print("\n--- Últimos eventos ---")
+        for l in self.logs[-12:]:
+            print(l)
+        print("\nEscribe 'ayuda' para ver comandos.")
 
-    # visualizador 
-    if HAS_VISUALIZADOR:
-        viz = Visualizador(mapa)
-        viz.mostrar_mapa_completo()
-    else:
-        print("Visualizador no disponible -> mostrando ASCII:")
-        print(mapa.imprimir_ascii())
+    def cmd_mover(self):
+        hab = self.mapa.habitaciones.get(tuple(self.explorador.posicion_actual))
+        if not hab:
+            self.log("Posición inválida.")
+            return
+        opciones = list(hab.conexiones.keys())
+        if not opciones:
+            self.log("No hay direcciones disponibles desde aquí.")
+            return
+        dir_ = random.choice(opciones)
+        ok = self.explorador.mover(dir_)
+        if not ok:
+            self.log(f"No puedes mover {dir_} desde {self.explorador.posicion_actual}.")
+            return
+        self.log(f"Movido {dir_} -> {self.explorador.posicion_actual}.")
+        hab2 = self.mapa.habitaciones.get(tuple(self.explorador.posicion_actual))
+        if hab2 and hab2.contenido:
+            res = self.explorador.explorar_habitacion()
+            self.log(res)
 
-    mostrar_estadisticas_si_existe(mapa)
+    def cmd_ir(self, x:int, y:int):
+        dest = (int(x), int(y))
+        path = self.explorador.encontrar_camino(dest)
+        if not path and tuple(self.explorador.posicion_actual) != tuple(dest):
+            self.log("No hay camino hacia destino.")
+            return
+        for direccion, coord in path:
+            if not self.explorador.esta_vivo:
+                self.log("Muerto, no puedes continuar.")
+                break
+            moved = self.explorador.mover(direccion)
+            if not moved:
+                self.log(f"Movimiento falló en {direccion}.")
+                break
+            self.log(f"Moviendo {direccion} -> {self.explorador.posicion_actual}")
+            hab = self.mapa.habitaciones.get(tuple(self.explorador.posicion_actual))
+            if hab and hab.contenido:
+                res = self.explorador.explorar_habitacion()
+                self.log(res)
 
-    # buscar coordenadas de tesoro y monstruo
-    coord_tesoro = None
-    coord_mon = None
-    for coord, hab in mapa.habitaciones.items():
-        if hab.contenido is not None:
-            tipo = getattr(hab.contenido, "tipo", None)
-            if tipo == "tesoro" and coord_tesoro is None:
-                coord_tesoro = coord
-            if tipo == "monstruo" and coord_mon is None:
-                coord_mon = coord
-        if coord_tesoro and coord_mon:
+    def cmd_guardar(self, ruta=None):
+        ruta = ruta or self.save_default
+        if not HAS_SERIAL:
+            self.log("Serialización no disponible.")
+            return
+        try:
+            guardar_partida(self.mapa, self.explorador, ruta)
+            abs = Path(ruta).resolve()
+            self.log(f"Partida guardada en: {abs}")
+        except Exception as e:
+            self.log(f"Error guardando: {e}")
+
+    def _choose_file_interactive(self, dirpath="."):
+        p = Path(dirpath)
+        files = sorted([f for f in p.glob("*.json") if f.is_file()])
+        if not files:
+            print("No hay archivos .json en", Path(dirpath).resolve())
+            return None
+        print("\nArchivos guardados disponibles:")
+        for i, f in enumerate(files):
+            size = f.stat().st_size
+            mtime = f.stat().st_mtime
+            from datetime import datetime
+            mt = datetime.fromtimestamp(mtime).strftime("%Y-%m-%d %H:%M:%S")
+            print(f"  [{i}] {f.name}    ({size} bytes, mod: {mt})")
+        while True:
+            try:
+                choice = input("Selecciona índice (o 'c' para cancelar): ").strip()
+            except (KeyboardInterrupt, EOFError):
+                return None
+            if choice.lower() in ("c", "q", ""):
+                print("Selección cancelada.")
+                return None
+            try:
+                idx = int(choice)
+                if 0 <= idx < len(files):
+                    return str(files[idx])
+                else:
+                    print("Índice fuera de rango.")
+            except ValueError:
+                print("Entrada inválida. Escribe el número del índice o 'c' para cancelar.")
+
+    def cmd_cargar(self, ruta=None):
+        if not HAS_SERIAL:
+            self.log("Serialización no disponible.")
+            return
+        path_to_load = ruta
+        if ruta is None or ruta == "seleccionar":
+            chosen = self._choose_file_interactive(".")
+            if not chosen:
+                self.log("Carga cancelada o no hay archivos.")
+                return
+            path_to_load = chosen
+        try:
+            mapa2, exp2 = cargar_partida(path_to_load)
+            self.mapa = mapa2
+            self.explorador = exp2
+            if HAS_VIS:
+                self.visualizador = Visualizador(self.mapa)
+            self.logs = []
+            self.log(f"Partida cargada desde {Path(path_to_load).resolve()}")
+        except Exception as e:
+            self.log(f"Error cargando: {e}")
+
+    def cmd_help(self):
+        lines = [
+            "Comandos:",
+            "  Mover Aleatoriamente      - mover un paso en dirección aleatoria disponible",
+            "  Ir a coord (x,y)          - caminar hasta x,y paso a paso",
+            "  Guardar [ruta]            - guardar partida (por defecto prueba.json)",
+            "  Cargar [ruta]             - cargar partida (sin args lista archivos y permite seleccionar)",
+            "  Reinicio / reset          - reiniciar la partida (nuevo mapa con mismos parámetros)",
+            "  Estado                    - mostrar estado (redibuja)",
+            "  Ayuda                     - mostrar esta ayuda",
+            "  Salir                     - salir (pregunta y/n)"
+        ]
+        for l in lines:
+            self.log(l)
+
+def repl_loop(controller: Controller):
+    controller.render()
+    while True:
+        try:
+            cmd = input("\nComando> ").strip()
+        except (KeyboardInterrupt, EOFError):
+            print("\nSaliendo.")
             break
-
-    # crear explorador
-    exp = Explorador(mapa)
-    print("Explorador inicial:", exp)
-    if HAS_VISUALIZADOR:
-        viz.mostrar_estado_explorador(exp)
-        viz.mostrar_minimapa(exp)
-
-    # probar tesoro
-    if coord_tesoro:
-        print("\n--- Probando tesoro ---")
-        exp.posicion_actual = coord_tesoro
-        print("Posición del explorador ->", exp.posicion_actual)
-        if HAS_VISUALIZADOR:
-            viz.mostrar_habitacion_actual(exp)
-        salida = exp.explorar_habitacion()
-        print(salida)
-        print("Inventario ahora:", exp.inventario)
-        print("Contenido en esa habitación:", contenido_str(mapa.habitaciones[coord_tesoro]))
-        if HAS_VISUALIZADOR:
-            viz.mostrar_estado_explorador(exp)
-            viz.mostrar_minimapa(exp)
-
-    # probar combate
-    if coord_mon:
-        print("\n--- Probando combate ---")
-        exp.posicion_actual = coord_mon
-        print("Posición del explorador ->", exp.posicion_actual)
-        if HAS_VISUALIZADOR:
-            viz.mostrar_habitacion_actual(exp)
-        salida = exp.explorar_habitacion()
-        print(salida)
-        print("Vida del explorador:", exp.vida)
-        print("Contenido en esa habitación:", contenido_str(mapa.habitaciones[coord_mon]))
-        if HAS_VISUALIZADOR:
-            viz.mostrar_estado_explorador(exp)
-            viz.mostrar_minimapa(exp)
-
-    # guardar partida 
-    save_file = "prueba.json"
-    if HAS_SERIALIZACION:
-        try:
-            guardar_partida(mapa, exp, save_file)
-            print(f"\nPartida guardada en '{save_file}'")
-        except Exception as e:
-            print("Error guardando partida:", e)
-    else:
-        print("\nMódulo de serialización no disponible. Saltando guardado.")
-
-    # cargar partida y mostrar lo cargado 
-    if HAS_SERIALIZACION:
-        try:
-            mapa2, exp2 = cargar_partida(save_file)
-            print("\nPartida cargada. Estado cargado:")
-            if HAS_VISUALIZADOR:
-                viz2 = Visualizador(mapa2)
-                viz2.mostrar_mapa_completo()
-                viz2.mostrar_estado_explorador(exp2)
-                viz2.mostrar_minimapa(exp2)
+        if not cmd:
+            controller.render()
+            continue
+        parts = cmd.split()
+        op = parts[0].lower()
+        args = parts[1:]
+        if op in ("salir", "q", "exit"):
+            try:
+                ans = input("¿Seguro que quieres salir? (y/n): ").strip().lower()
+            except (KeyboardInterrupt, EOFError):
+                ans = "n"
+            if ans and ans[0] == "y":
+                break
             else:
-                print(mapa2.imprimir_ascii())
-            mostrar_estadisticas_si_existe(mapa2)
-        except Exception as e:
-            print("Error cargando partida:", e)
-
-    # limpieza
-    if HAS_SERIALIZACION:
-        try:
-            p = Path(save_file)
-            if p.exists():
-                p.unlink()
-        except Exception:
-            pass
-
-    print("\nDemo finalizada.")
-
+                controller.log("Salida cancelada.")
+                controller.render()
+                continue
+        if op in ("mover", "m"):
+            controller.cmd_mover()
+        elif op == "ir" and args:
+            xy = args[0].split(",")
+            if len(xy) == 2:
+                controller.cmd_ir(int(xy[0]), int(xy[1]))
+            else:
+                controller.log("Formato ir x,y")
+        elif op == "guardar":
+            controller.cmd_guardar(args[0] if args else None)
+        elif op == "cargar":
+            controller.cmd_cargar(args[0] if args else None)
+        elif op in ("reinicio"):
+            controller.reset()
+        elif op in ("ayuda", "help"):
+            controller.cmd_help()
+        elif op == "estado":
+            controller.log("Refrescando estado.")
+        else:
+            controller.log("Comando desconocido. Escribe 'ayuda'.")
+        controller.render()
 
 if __name__ == "__main__":
-    demo()
+    ctrl = Controller()
+    ctrl.log("Bienvenido. Escribe 'ayuda' para comandos.")
+    repl_loop(ctrl)
