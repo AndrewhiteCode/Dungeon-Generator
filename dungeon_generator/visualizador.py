@@ -18,7 +18,7 @@ class Visualizador:
         "tesoro": ("T", "bold black on yellow"),
         "evento": ("E", "bold white on magenta"),
         None: (" ", "dim"),
-        "vacía": ("0", "dim"), 
+        "vacía": ("0", "dim"),  
     }
 
     def __init__(
@@ -40,13 +40,11 @@ class Visualizador:
         self.cell_w = max(1, int(cell_w))
         self.cell_h = max(1, int(cell_h))
 
-    
     def _sym_and_style_for_hab(self, hab):
         """
         Devuelve (símbolo, estilo) para la celda de 'hab' en el mapa completo.
         Ahora: si hay habitación y su contenido es None -> mostrar '0' (vacía).
         """
-       
         if getattr(hab, "inicial", False):
             return ("S", "bold white on blue")
 

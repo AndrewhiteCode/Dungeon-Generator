@@ -65,6 +65,7 @@ class Mapa:
         deltas = {"norte": (0, -1), "sur": (0, 1), "este": (1, 0), "oeste": (-1, 0)}
         existing = set([inicio_coord])
 
+        # frontier = celdas adyacentes libres a las habitaciones existentes
         frontier = set()
         for dx, dy in deltas.values():
             nx, ny = inicio_coord[0] + dx, inicio_coord[1] + dy
@@ -86,13 +87,14 @@ class Mapa:
         def distancia_min_a_existentes(coord):
             return min(abs(coord[0] - e[0]) + abs(coord[1] - e[1]) for e in existing)
 
+        # Probabilidades
         P_ADDITIONAL_CONN = 0.25  
-        MAX_ATTEMPT_REPOB = 3    
+        MAX_ATTEMPT_REPOB = 3     
 
         repob_intentos = 0
         while self._next_id < n_habitaciones:
             if not frontier:
-              
+                
                 if repob_intentos >= MAX_ATTEMPT_REPOB:
                     break
                 frontier = repoblar_frontier()
@@ -100,9 +102,7 @@ class Mapa:
                 if not frontier:
                     continue
 
-       
             dist_list = [(distancia_min_a_existentes(f), f) for f in frontier]
-           
             dist_list.sort(reverse=True, key=lambda x: x[0])
             top_fraction = 0.5  
             top_k = max(1, int(len(dist_list) * top_fraction))
@@ -348,8 +348,10 @@ class Mapa:
                 efecto = {"tipo": "portal"}
                 return Evento("Portal", "Teletransportador", efecto)
             else:
-                efecto = {"tipo": "buff", "detalle": f"+1 daño por {1 + dist//5} turnos"}
-                return Evento("Bonificación", "Aumenta temporalmente tus estadísticas", efecto)
+                ataque_bonus = 1 + (dist // 5)
+                dur = 2 + (dist // 6)
+                efecto = {"tipo": "buff_por_habitaciones", "ataque": ataque_bonus, "habitaciones": dur}
+                return Evento("Bonificación", f"+{ataque_bonus} ataque por {dur} habitaciones", efecto)
 
         if n_jefes > 0:
             coord = next(it)

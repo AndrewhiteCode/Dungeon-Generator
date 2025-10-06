@@ -47,8 +47,13 @@ class Tesoro(ContenidoHabitacion):
 
     def interactuar(self, explorador) -> str:
         explorador.inventario.append(self.recompensa)
-        msg = f"Has recogido el tesoro: {self.recompensa.nombre} (valor {self.recompensa.valor})"
-        return msg
+        cat = getattr(self.recompensa, "categoria", "normal")
+        if cat == "equipable":
+            return f"Has encontrado un objeto equipable: {self.recompensa.nombre}. Está en tu inventario; usa 'equipar' para ponértelo."
+        elif cat == "consumible":
+            return f"Has encontrado un consumible: {self.recompensa.nombre}. Está en tu inventario; usa 'usar' para activarlo."
+        else:
+            return f"Has recogido el tesoro: {self.recompensa.nombre} (valor {self.recompensa.valor})"
 
     def to_dict(self) -> Dict[str, Any]:
         return {"tipo": self.tipo, "recompensa": self.recompensa.to_dict()}
@@ -82,7 +87,10 @@ class Monstruo(ContenidoHabitacion):
         log.append(f"Comienza el combate contra {self.nombre} (PV enemigo: {vida_enemigo}).")
         while vida_enemigo > 0 and vida_jugador > 0:
             if turno == 0:
-                danio = random.randint(1, 2)
+                attack_val = explorador.calcular_ataque()
+                min_dmg = max(1, attack_val - 1)
+                max_dmg = attack_val + 1
+                danio = random.randint(min_dmg, max_dmg)
                 vida_enemigo -= danio
                 log.append(f"Atacas y haces {danio} de daño (enemigo {max(0, vida_enemigo)} PV).")
                 turno = 1
@@ -181,20 +189,86 @@ class Evento(ContenidoHabitacion):
         return "evento"
 
     def interactuar(self, explorador) -> str:
-        if self.efecto.get("tipo") == "curar":
-            amount = int(self.efecto.get("valor", 1))
+        """
+        Aplica el efecto del evento sobre el explorador.
+        Efectos soportados (self.efecto es un dict):
+        - tipo: "curar", "valor": int
+        - tipo: "trampa", "valor": int
+        - tipo: "teleport", "auto_explore": bool (opcional)
+        - tipo: "buff_por_habitaciones", "ataque": int, "habitaciones": int
+        - tipo: "modificar_ataque", "delta": int, "modo": "permanente"|"temporal_habitaciones", "habitaciones": int (si temporal)
+        """
+        tipo = self.efecto.get("tipo")
+        if tipo == "curar":
+            amount = int(self.efecto.get("valor", 5))
             explorador.vida += amount
-            return f"Fuente: recuperas {amount} PV."
-        elif self.efecto.get("tipo") == "trampa":
-            amount = int(self.efecto.get("valor", 1))
+            return f"Has enontrado un mago amigable recibes {amount} PV."
+        elif tipo == "trampa":
+            amount = int(self.efecto.get("valor", 2))
             explorador.recibir_dano(amount)
-            return f"Trampa: recibes {amount} de daño."
-        elif self.efecto.get("tipo") == "portal":
-            return "Portal: te teletransportas a otra habitación."
-        elif self.efecto.get("tipo") == "buff":
-            return f"Bonificación temporal: {self.efecto.get('detalle', '')}"
+            return f"Has caido en una trampa, recibes {amount} de daño."
+        elif tipo == "teleport":
+            coords = list(explorador.mapa.habitaciones.keys())
+            if not coords:
+                return "Portal: no hay habitaciones disponibles."
+            current = tuple(explorador.posicion_actual)
+            choices = [c for c in coords if c != current]
+            if not choices:
+                return "Portal: no hay otra habitación a la que teletransportarte."
+            dest = random.choice(choices)
+            explorador.posicion_actual = tuple(dest)
+            explorador.mapa.habitaciones[dest].visitada = True
+            msg = f"Has caido en un portal que te a llevado a {dest}."
+            if self.efecto.get("auto_explore", False):
+                depth = getattr(explorador, "_event_chain_depth", 0)
+                if depth >= 3:
+                    msg += " (límite de encadenamiento alcanzado, no se explora automáticamente)."
+                else:
+                    explorador._event_chain_depth = depth + 1
+                    try:
+                        extra = explorador.explorar_habitacion()
+                        if extra:
+                            msg += "\n" + extra
+                    finally:
+                        explorador._event_chain_depth = depth
+            return msg
+        elif tipo == "buff_por_habitaciones":
+            atk = int(self.efecto.get("ataque", 1))
+            dur = int(self.efecto.get("habitaciones", 1))
+            if not hasattr(explorador, "buffs"):
+                explorador.buffs = []
+            explorador.buffs.append({"ataque": atk, "restante_habitaciones": dur})
+            return f"Bonificación activada: +{atk} ataque por {dur} habitaciones."
+        elif tipo == "modificar_ataque":
+            delta = int(self.efecto.get("delta", 0))
+            modo = self.efecto.get("modo", "permanente")
+            if modo == "permanente":
+                if not hasattr(explorador, "ataque_base"):
+                    explorador.ataque_base = getattr(explorador, "ataque_base", 1)
+                explorador.ataque_base += delta
+                sign = "+" if delta >= 0 else ""
+                return f"Tu ataque se modifica {sign}{delta} permanentemente."
+            elif modo == "temporal_habitaciones":
+                dur = int(self.efecto.get("habitaciones", 1))
+                if not hasattr(explorador, "buffs"):
+                    explorador.buffs = []
+                explorador.buffs.append({"ataque": delta, "restante_habitaciones": dur})
+                sign = "+" if delta >= 0 else ""
+                return f"Tu ataque {('aumenta' if delta>0 else 'disminuye')} {sign}{delta} por {dur} habitaciones."
+            else:
+                return "Efecto de modificar_ataque desconocido."
         else:
-            return "Evento misterioso..."
+            if self.efecto.get("tipo") == "curar":
+                amount = int(self.efecto.get("valor", 1))
+                explorador.vida += amount
+                return f"Fuente: recuperas {amount} PV."
+            elif self.efecto.get("tipo") == "trampa":
+                amount = int(self.efecto.get("valor", 1))
+                explorador.recibir_dano(amount)
+                return f"Trampa: recibes {amount} de daño."
+            else:
+                return "Evento misterioso..."
+
 
     def to_dict(self) -> Dict[str, Any]:
         return {"tipo": self.tipo, "nombre": self.nombre, "descripcion": self._descripcion, "efecto": self.efecto}

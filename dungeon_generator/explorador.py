@@ -72,13 +72,11 @@ class Explorador:
                 self.buffs.append({"ataque": val, "restante_habitaciones": dur})
                 self.inventario.remove(objeto)
                 return f"Has usado {objeto.nombre}. +{val} ataque por {dur} habitaciones."
-       
         if eff.get("tipo") == "curar":
             amt = int(eff.get("valor", 1))
             self.vida += amt
             self.inventario.remove(objeto)
             return f"Has usado {objeto.nombre} y recuperas {amt} PV."
-      
         self.inventario.remove(objeto)
         return f"Has usado {objeto.nombre}."
 
@@ -97,7 +95,6 @@ class Explorador:
         otra = hab.conexiones[direccion]
         self.posicion_actual = tuple(otra.pos)
         otra.visitada = True
-      
         nuevos = []
         for b in (self.buffs or []):
             b["restante_habitaciones"] -= 1
